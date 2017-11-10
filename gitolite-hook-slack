@@ -1,0 +1,127 @@
+#!/usr/bin/env python
+
+import json
+import os
+import requests
+import sys
+from ConfigParser import SafeConfigParser
+from git import Repo
+
+CONFIGFILE = '/var/lib/gitolite/.gitolite-postrecv-slack'
+config = {}
+
+
+def send_slack(message):
+    response = requests.post(config['slack_hook'], json=message)
+    if response.status_code != 200:
+        raise ValueError(
+            'Request to slack returned an error %s, the response is:\n%s'
+            % (response.status_code, response.text)
+        )
+
+
+def branch_create(git_info):
+    print "-- creating branch"
+    repo = Repo(config['git_dir'])
+    author = repo.commit(git_info['newrev']).author
+    branch = git_info['refname'].replace('refs/heads/', '')
+    commit_message = repo.commit(git_info['newrev']).message
+    commit_url = config['commit_url'] + git_info['newrev']
+    message = {'text': ">>>*commit* : %s `%s`\n*author* : %s\n```%s```" %
+               ("<%s|%s>" % (commit_url, git_info['newrev']), branch, "%s <%s>" % (author.name, author.email), commit_message),
+               'username': 'hcc-git | branch created'}
+    send_slack(message)
+
+
+def branch_delete(git_info):
+    print "-- deleting branch"
+    repo = Repo(config['git_dir'])
+    author = repo.commit(git_info['oldrev']).author
+    branch = git_info['refname'].replace('refs/heads/', '')
+    message = {'text': "%s deleted branch `%s`" % (author.name, branch),
+               'username': 'hcc-git | branch deleted'}
+    send_slack(message)
+
+
+def branch_commit(git_info):
+    print "-- commit to branch"
+    repo = Repo(config['git_dir'])
+    author = repo.commit(git_info['newrev']).author
+    branch = git_info['refname'].replace('refs/heads/', '')
+    commit_message = repo.commit(git_info['newrev']).message
+    commit_url = config['commit_url'] + git_info['newrev']
+
+    # determine if commit is a merge
+    name_rev = repo.commit(git_info['newrev']).name_rev.split()[1]
+    if git_info['refname'] == 'refs/heads/production' and name_rev != 'production':
+        # this should be a merge from name_rev
+        message = {'text': "%s merged `%s` into `%s`" % (author.name, name_rev, branch),
+                   'username': 'hcc-git | merge'}
+        send_slack(message)
+    else:
+        message = {'text': ">>>*commit* : %s `%s`\n*author* : %s\n```%s```" %
+                   ("<%s|%s>" % (commit_url, git_info['newrev']), branch, "%s <%s>" % (author.name, author.email), commit_message),
+                   'username': 'hcc-git | commit'}
+        send_slack(message)
+
+
+def run_r10k(git_info):
+    print "-- running r10k"
+    repo = Repo(config['git_dir'])
+    branch = git_info['refname'].replace('refs/heads/', '')
+    if git_info['newrev'] != '0000000000000000000000000000000000000000':
+        if 'Puppetfile' in repo.commit(git_info['newrev']).stats.files:
+            print "-- Puppetfile in commit, r10k with puppetfile"
+            cmd = "ssh %s \"%s -p\"" % (config['puppet_sync'], branch)
+            print "-- executing %s" % (cmd)
+            os.system(cmd)
+        else:
+            print "-- no puppetfile, r10k deploy only"
+            cmd = "ssh %s \"%s\"" % (config['puppet_sync'], branch)
+            print "-- executing %s" % (cmd)
+            os.system(cmd)
+    else:
+        print "-- branch deletion, r10k deploy only"
+        cmd = "ssh %s \"%s\"" % (config['puppet_sync'], branch)
+        print "-- executing %s" % (cmd)
+        os.system(cmd)
+
+
+def main():
+    global config
+    # gitolite wrapper calls with (hookname oldrev newrev refname)
+    if len(sys.argv) != 5:
+        print "Error: expected <hookname> <oldrev> <newrev> <refname> as arguments"
+        print "Got: %s", sys.argv
+        sys.exit(1)
+
+    hookname = sys.argv[1].replace('post-receive.h00-', '')
+    oldrev = sys.argv[2]
+    newrev = sys.argv[3]
+    refname = sys.argv[4]
+
+    # read config section for hookname
+    parser = SafeConfigParser()
+    parser.read(CONFIGFILE)
+    if parser.has_section(hookname):
+        config = dict(parser.items(hookname))
+    else:
+        print "Error: no config section for %s found" % hookname
+        sys.exit(1)
+
+    git_info = {'hookname': hookname, 'oldrev': oldrev, 'newrev': newrev, 'refname': refname}
+
+    if git_info['oldrev'] == '0000000000000000000000000000000000000000':
+        branch_create(git_info)
+    elif git_info['newrev'] == '0000000000000000000000000000000000000000':
+        branch_delete(git_info)
+    else:
+        branch_commit(git_info)
+
+    if config['enable_r10k']:
+        print "running r10k"
+        # run_r10k(git_info)
+
+
+if __name__ == "__main__":
+    main()
