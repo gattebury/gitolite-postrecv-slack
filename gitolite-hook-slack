@@ -95,9 +95,13 @@ def main():
         sys.exit(1)
 
     hookname = sys.argv[1].replace('post-receive.h00-', '')
-    oldrev = sys.argv[2]
-    newrev = sys.argv[3]
-    refname = sys.argv[4]
+
+    git_info = {
+        'hookname': hookname,
+        'oldrev': sys.argv[2],
+        'newrev': sys.argv[3],
+        'refname': sys.argv[4],
+    }
 
     # read config section for hookname
     parser = SafeConfigParser()
@@ -107,8 +111,6 @@ def main():
     else:
         print("Error: no config section for %s found" % hookname)
         sys.exit(1)
-
-    git_info = {'hookname': hookname, 'oldrev': oldrev, 'newrev': newrev, 'refname': refname}
 
     if git_info['oldrev'] == '0000000000000000000000000000000000000000':
         branch_create(git_info)
