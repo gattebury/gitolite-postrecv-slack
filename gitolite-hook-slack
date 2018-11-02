@@ -11,6 +11,7 @@ BOTNAME = 'hcc-git'
 PUPPETFILE = 'Puppetfile'
 CONFIGFILE = '/var/lib/gitolite/.gitolite-postrecv-slack'
 MASTER = 'production'
+COMMIT_TEXT_LIMIT = 3
 
 # Debug output for GitPython
 #import logging
@@ -52,12 +53,17 @@ class GitInfo(object):
                 self.type = 'commit'
 
         commit_texts = list()
+        many_more = 0
 
         # Loop over commits
         for commit in commits:
             # Was Puppetfile modified?
             if PUPPETFILE in commit.stats.files:
                 self.puppetfile = True
+
+            if len(commit_texts) >= COMMIT_TEXT_LIMIT:
+                many_more += 1
+                continue
 
             # Generate a message for this commit
             commit_text = commit_tpl.format(
@@ -68,6 +74,11 @@ class GitInfo(object):
                 email=commit.author.email,
                 message=commit.message)
             commit_texts.append(commit_text)
+
+        if many_more:
+            log_url = self.config['commit_url'].replace('/commit/?id=', '/log/?qt=range&q=')
+            log_url += '%s..%s' % (oldrev, newrev)
+            commit_texts.append("And <%s|%d more>.\n" % (log_url, many_more))
 
         if commit_texts:
             self.text += '>>>' + "\n".join(commit_texts)
